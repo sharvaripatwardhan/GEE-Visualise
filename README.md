@@ -1,5 +1,6 @@
 # GEE-Visualise
 Visualise Remote Sensing Data from GEE using Python
+(Template workflow provided for the state of Maharshtra in India)
 
 ```
 GEE-Visualise/
