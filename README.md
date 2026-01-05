@@ -2,7 +2,7 @@
 Visualise Remote Sensing Data from GEE using Python
 
 ```
-NTL_EPI_Analysis/
+GEE-Visualise/
 │
 ├── data/                                   <- Raw input data
 │   ├── Maha_NTL_NDVI_2014_20.csv
