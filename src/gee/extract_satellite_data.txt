@@ -1,0 +1,185 @@
+// Night-Time Lights monitoring using VIIRS-DNB Dataset in Google Earth Engine
+
+//-----------------------------------------------------------------------------
+// Set administrative boundaries (GAUL 2015)
+//-----------------------------------------------------------------------------
+
+var gaul2 = ee.FeatureCollection("FAO/GAUL/2015/level2");
+
+// Filter to India
+var IndiaDist = gaul2.filter(ee.Filter.eq("ADM0_NAME", "India"));
+
+// Filter to Maharashtra
+var MahaDist = IndiaDist.filter(ee.Filter.eq("ADM1_NAME", "Maharashtra"));
+print("Maharashtra districts:", MahaDist.size());
+
+// Map setup
+Map.centerObject(MahaDist, 6);
+Map.addLayer(MahaDist, {color: 'blue'}, "Maharashtra Districts")
+
+
+
+//-----------------------------------------------------------------------------
+// Load VIIRS NTL, MODIS NDVI, GHSL Built-up
+//-----------------------------------------------------------------------------
+
+// VIIRS Nighttime Lights (monthly)
+var viirs = ee.ImageCollection('NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG')
+            .select('avg_rad');
+
+
+// MODIS NDVI (16-day)
+var modis_ndvi = ee.ImageCollection('MODIS/061/MOD13Q1')
+                 .select('NDVI');
+
+var scaleNDVI = 0.0001;  // scale factor
+
+
+// GHSL Built-up Surface (R2023A, 100 m, available for 2015 & 2020)
+var ghsl_2015 = ee.Image("JRC/GHSL/P2023A/GHS_BUILT_S/2015").select('built_surface');
+var ghsl_2020 = ee.Image("JRC/GHSL/P2023A/GHS_BUILT_S/2020").select('built_surface');
+
+
+
+//-----------------------------------------------------------------------------
+// Define year range
+var start_year = 2014;
+var end_year = 2024;
+var years = ee.List.sequence(start_year, end_year);
+//-----------------------------------------------------------------------------
+
+
+
+//-----------------------------------------------------------------------------
+// Functions to calculate annual mean for NTL + NDVI
+//-----------------------------------------------------------------------------
+
+// Annual VIIRS radiance mean
+var get_mean_viirs = function(year) {
+  var start = ee.Date.fromYMD(year, 1, 1);
+  var end = start.advance(1, "year");
+
+  return viirs.filterDate(start, end)
+              .mean()
+              .rename("NTL_mean")
+              .set("year", year);
+};
+
+
+// Annual NDVI mean
+var get_mean_ndvi = function(year) {
+  var start = ee.Date.fromYMD(year, 1, 1);
+  var end = start.advance(1, "year");
+
+  return modis_ndvi.filterDate(start, end)
+                   .mean()
+                   .multiply(scaleNDVI)
+                   .rename("NDVI_mean")
+                   .set("year", year);
+};
+
+
+
+//-----------------------------------------------------------------------------
+// Compute annual indicators
+//-----------------------------------------------------------------------------
+
+var annual_indicators = years.map(function(y) {
+  y = ee.Number(y);
+
+  var viirsImg = get_mean_viirs(y);
+  var ndviImg = get_mean_ndvi(y);
+
+  return viirsImg.addBands(ndviImg).set("year", y);
+});
+
+
+
+//-----------------------------------------------------------------------------
+// Compute district-level indicators for each year
+//-----------------------------------------------------------------------------
+
+var annual_stats = ee.FeatureCollection(
+  annual_indicators.map(function(img) {
+    img = ee.Image(img);
+    var year = img.get("year");
+
+    var stats = img.reduceRegions({
+      collection: MahaDist,
+      reducer: ee.Reducer.mean(),
+      scale: 500,
+      tileScale: 4
+    });
+
+    return stats.map(function(f) {
+      return f.set("year", year)
+              .set("district", f.get("ADM2_NAME"))
+              .set("state", f.get("ADM1_NAME"));
+    });
+  })
+).flatten();
+
+print("Annual NTL + NDVI sample:", annual_stats.limit(5));
+
+
+// District-wise built-up extraction (2015 & 2020)
+
+var built_2015 = ghsl_2015.reduceRegions({
+  collection: MahaDist,
+  reducer: ee.Reducer.mean(),
+  scale: 100,
+  tileScale: 4
+}).map(function(f) {
+  return f.set("year", 2015)
+          .set("indicator", "built_up")
+          .set("district", f.get("ADM2_NAME"))
+          .set("state", f.get("ADM1_NAME"));
+});
+
+
+var built_2020 = ghsl_2020.reduceRegions({
+  collection: MahaDist,
+  reducer: ee.Reducer.mean(),
+  scale: 100,
+  tileScale: 4
+}).map(function(f) {
+  return f.set("year", 2020)
+          .set("indicator", "built_up")
+          .set("district", f.get("ADM2_NAME"))
+          .set("state", f.get("ADM1_NAME"));
+});
+
+var builtup_stats = built_2015.merge(built_2020);
+print("Built-up sample:", builtup_stats.limit(5));
+
+
+
+//-----------------------------------------------------------------------------
+// Visualise last year NTL & NDVI
+//-----------------------------------------------------------------------------
+
+var lastNTL = get_mean_viirs(end_year);
+Map.addLayer(lastNTL, {min: 0, max: 40, palette: ["black","blue","cyan","yellow","red"]},
+             "VIIRS NTL " + end_year);
+
+var lastNDVI = get_mean_ndvi(end_year);
+Map.addLayer(lastNDVI, {min: 0, max: 0.8, palette: ["brown","yellow","green"]},
+             "NDVI " + end_year);
+
+
+
+//-----------------------------------------------------------------------------
+// Export CSV for Python
+//-----------------------------------------------------------------------------
+
+Export.table.toDrive({
+  collection: annual_stats,
+  description: 'Maha_NTL_NDVI_2014_20',
+  fileFormat: 'CSV'
+});
+
+Export.table.toDrive({
+  collection: builtup_stats,
+  description: 'Maha_BuiltUp_2015_2020',
+  fileFormat: 'CSV'
+});  
